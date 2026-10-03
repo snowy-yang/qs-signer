@@ -683,6 +683,10 @@ static std::string exeDir() {
 }
 
 int main(int argc, char **argv) {
+    // 源码统一 UTF-8(/utf-8 编译),Windows 控制台默认 GBK 代码页,不切会中文乱码;重定向到文件/管道不受影响
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+
     Config cfg;
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];

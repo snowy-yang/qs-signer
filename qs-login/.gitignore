@@ -1,0 +1,5 @@
+# 专有二进制与构建产物不入库
+metasecml.dll
+*.exe
+*.log
+*.obj
