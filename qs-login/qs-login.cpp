@@ -1,18 +1,17 @@
-// qs-login —— 汽水音乐「本机客户端登录」导入工具(单文件 C++,原 qs-local-login.mjs)
+// qs-login —— 汽水音乐「本机客户端登录态」读取工具(单文件 C++,只读不写)
 //
 // 做什么:官方 SodaMusic PC 客户端是 Chromium,登录态存在本机
 //   %APPDATA%\SodaMusic\Network\Cookies(SQLite),设备身份在 %APPDATA%\SodaMusic\DeviceV1
-//   (gzip JSON,含 did/iid)。本工具读出来 → 可选用 metasecml.dll 签名调 /luna/pc/me 校验
-//   → 写入 MusicServer 的 data/auth.json 的 qs 字段,免扫码登录。
+//   (gzip JSON,含 did/iid)。本工具把它们读出来、可选签名校验,然后完整显示 sessionid
+//   并复制到剪贴板——本仓库是独立项目,不写任何外部工程的文件,凭据粘贴到哪由你自己决定
+//   (例如手动填进 MusicServer 的登录配置)。
 //
 // 用法:
-//   qs-login.exe                    # 读取 + 校验 + 复制剪贴板 + 写入 ../MusicServer/data/auth.json
-//                                    # (可直接双击运行:窗口等回车才关,sessionid 完整显示并自动复制)
-//   qs-login.exe --print            # 只输出 sessionid 到 stdout(脚本用:不暂停/不写剪贴板/不落盘)
+//   qs-login.exe                    # 读取 + 校验 + 完整显示 + 复制剪贴板(可直接双击:窗口等回车才关)
+//   qs-login.exe --print            # 只输出 sessionid 到 stdout(脚本用:不暂停/不写剪贴板)
 //   qs-login.exe --no-verify        # 跳过 /luna/pc/me 校验
 //   qs-login.exe --no-pause         # 结束时不等待回车(脚本用)
 //   qs-login.exe --dir <目录>       # 客户端数据目录(默认 %APPDATA%\SodaMusic,或 QS_SODA_DATA_DIR)
-//   qs-login.exe --auth <文件>      # auth.json 路径(默认 ../MusicServer/data/auth.json,或 QS_AUTH_FILE)
 //   qs-login.exe --dll <path>       # metasecml.dll(校验签名用;默认 exe 同目录,其次 ..\mssdk-sign\,缺了跳过校验)
 //
 // 实现说明(无第三方依赖):
@@ -83,14 +82,6 @@ static bool readFile(const std::string &path, std::string &out) {
     CloseHandle(f);
     return true;
 }
-static bool writeFile(const std::string &path, const std::string &data) {
-    HANDLE f = CreateFileW(toWide(path).c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (f == INVALID_HANDLE_VALUE) return false;
-    DWORD w = 0;
-    BOOL ok = WriteFile(f, data.data(), (DWORD)data.size(), &w, nullptr) && w == data.size();
-    CloseHandle(f);
-    return ok;
-}
 static bool fileExists(const std::string &path) {
     DWORD a = GetFileAttributesW(toWide(path).c_str());
     return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
@@ -147,26 +138,6 @@ static std::string trim(const std::string &s) {
     if (a == std::string::npos) return "";
     size_t b = s.find_last_not_of(" \t\r\n");
     return s.substr(a, b - a + 1);
-}
-static std::string jsonEscape(const std::string &s) {
-    std::string o;
-    o.reserve(s.size() + 8);
-    for (unsigned char c : s) {
-        switch (c) {
-            case '"': o += "\\\""; break;
-            case '\\': o += "\\\\"; break;
-            case '\n': o += "\\n"; break;
-            case '\r': o += "\\r"; break;
-            case '\t': o += "\\t"; break;
-            default:
-                if (c < 0x20) {
-                    char b[8];
-                    snprintf(b, sizeof b, "\\u%04x", c);
-                    o += b;
-                } else o += (char)c;
-        }
-    }
-    return o;
 }
 
 static bool g_pauseOnExit = true;  // 双击运行时窗口别一闪而过;--print / --no-pause 关掉(脚本场景)
@@ -230,11 +201,6 @@ struct JVal {
         for (auto &kv : o)
             if (kv.first == k) return &kv.second;
         return nullptr;
-    }
-    void set(const std::string &k, const std::string &v) {  // 已有键原位覆盖,新键追加(保持键序)
-        if (JVal *e = get(k)) { e->t = Str; e->s = v; return; }
-        JVal nv; nv.t = Str; nv.s = v;
-        o.emplace_back(k, std::move(nv));
     }
 };
 
@@ -370,45 +336,6 @@ struct P {
     }
 };
 }  // namespace json
-
-// JSON.stringify(v, null, 2) 风格;数字/布尔保留原文,不重排键
-static void jserialize(const JVal &v, std::string &out, int depth) {
-    auto pad = [&](int d) { out.append((size_t)d * 2, ' '); };
-    switch (v.t) {
-        case JVal::Nul: out += "null"; break;
-        case JVal::Bool:
-        case JVal::Num: out += v.s; break;
-        case JVal::Str: out += '"'; out += jsonEscape(v.s); out += '"'; break;
-        case JVal::Arr:
-            if (v.a.empty()) { out += "[]"; break; }
-            out += "[\n";
-            for (size_t i = 0; i < v.a.size(); i++) {
-                pad(depth + 1);
-                jserialize(v.a[i], out, depth + 1);
-                out += (i + 1 < v.a.size()) ? ",\n" : "\n";
-            }
-            pad(depth);
-            out += "]";
-            break;
-        case JVal::Obj:
-            if (v.o.empty()) { out += "{}"; break; }
-            out += "{\n";
-            for (size_t i = 0; i < v.o.size(); i++) {
-                pad(depth + 1);
-                out += '"'; out += jsonEscape(v.o[i].first); out += "\": ";
-                jserialize(v.o[i].second, out, depth + 1);
-                out += (i + 1 < v.o.size()) ? ",\n" : "\n";
-            }
-            pad(depth);
-            out += "}";
-            break;
-    }
-}
-static std::string jpretty(const JVal &v) {
-    std::string out;
-    jserialize(v, out, 0);
-    return out;
-}
 
 // ---------------------------------------------------------------- gzip / DEFLATE 解压(RFC 1951/1952)
 
@@ -1268,15 +1195,14 @@ static HttpResult httpsGet(const std::wstring &host, const std::string &pathQuer
 
 static void printUsage() {
     printf(
-        "qs-login —— 汽水音乐本机客户端登录导入\n"
-        "从官方 PC 客户端数据目录读 sessionid(可选签名校验),自动复制到剪贴板并写入 MusicServer 的\n"
-        "auth.json。可直接双击运行:窗口会等待回车才关闭,sessionid 会完整显示并自动复制。\n"
+        "qs-login —— 汽水音乐本机客户端登录态读取(只读不写)\n"
+        "从官方 PC 客户端数据目录读 sessionid(可选签名校验),完整显示并复制到剪贴板。\n"
+        "可直接双击运行:窗口会等待回车才关闭。\n"
         "用法: qs-login [选项]\n"
-        "  --print          只输出 sessionid 到 stdout(脚本用,不暂停/不写剪贴板/不落盘)\n"
+        "  --print          只输出 sessionid 到 stdout(脚本用,不暂停/不写剪贴板)\n"
         "  --no-verify      跳过 /luna/pc/me 校验\n"
         "  --no-pause       结束时不等待回车(脚本用)\n"
         "  --dir <目录>     客户端数据目录(默认 %%APPDATA%%\\SodaMusic,或 QS_SODA_DATA_DIR)\n"
-        "  --auth <文件>    auth.json 路径(默认 ..\\..\\MusicServer\\data\\auth.json,或 QS_AUTH_FILE)\n"
         "  --dll <path>     metasecml.dll(校验签名用;默认 exe 同目录,其次 ..\\mssdk-sign\\,缺了跳过校验)\n");
 }
 
@@ -1285,7 +1211,7 @@ int main(int argc, char **argv) {
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
 
-    std::string dirArg, authArg, dllArg;
+    std::string dirArg, dllArg;
     bool printOnly = false, skipVerify = false;
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
@@ -1294,7 +1220,6 @@ int main(int argc, char **argv) {
         else if (a == "--no-verify") skipVerify = true;
         else if (a == "--no-pause") g_pauseOnExit = false;
         else if (a == "--dir") dirArg = next();
-        else if (a == "--auth") authArg = next();
         else if (a == "--dll") dllArg = next();
         else if (a == "-h" || a == "--help") { printUsage(); return 0; }
         else { fprintf(stderr, "未知参数: %s\n", a.c_str()); printUsage(); return 1; }
@@ -1478,50 +1403,8 @@ int main(int argc, char **argv) {
     printf("· sessionid: %s(%zu 字符)\n", sessionid.c_str(), sessionid.size());
     printf(copyToClipboard(sessionid) ? "· 已复制到剪贴板,可直接 Ctrl+V 粘贴\n"
                                       : "! 复制到剪贴板失败,请手动选中上一行复制\n");
+    printf("· 本工具只读不写,凭据粘贴到哪由你自己决定\n");
 
-    // —— 4. 写 auth.json(默认 ../MusicServer/data/auth.json;凭据归 MusicServer 管)——
-    std::string musicServerDir = root + "\\..\\MusicServer";
-    std::string authPath = !authArg.empty() ? authArg : envUtf8(L"QS_AUTH_FILE");
-    if (authPath.empty()) {
-        authPath = musicServerDir + "\\data\\auth.json";
-        DWORD a = GetFileAttributesW(toWide(musicServerDir).c_str());
-        if (a == INVALID_FILE_ATTRIBUTES) {
-            die("未找到同级 MusicServer 仓库(" + musicServerDir + "),请用 --auth <路径>/data/auth.json 指定写入目标");
-        }
-    }
-    JVal auth;
-    auth.t = JVal::Obj;
-    {
-        std::string old;
-        if (readFile(authPath, old)) {
-            json::P jp(old);
-            if (!jp.val(auth) || auth.t != JVal::Obj) {
-                die("现有 auth.json 解析失败,请手动检查:" + authPath);
-            }
-        }
-    }
-    {
-        SYSTEMTIME st;
-        GetSystemTime(&st);
-        char ts[40];
-        snprintf(ts, sizeof ts, "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ", st.wYear, st.wMonth, st.wDay, st.wHour,
-                 st.wMinute, st.wSecond, st.wMilliseconds);
-        JVal *qs = auth.get("qs");
-        if (!qs || qs->t != JVal::Obj) {
-            auth.o.emplace_back("qs", JVal{});
-            qs = &auth.o.back().second;
-            qs->t = JVal::Obj;
-        }
-        qs->set("sessionid", sessionid);
-        qs->set("cookie", "sessionid=" + sessionid);
-        qs->set("source", "local-client");
-        qs->set("updatedAt", ts);
-    }
-    if (!writeFile(authPath, jpretty(auth) + "\n")) {
-        die("写入 " + authPath + " 失败(错误码 " + std::to_string(GetLastError()) + ")");
-    }
-    printf("✓ 已写入 %s(qs.sessionid)\n", authPath.c_str());
-    printf("  MusicServer 在运行的话需要重启才生效(凭据已缓存);之后 /login/status 的 qs.logged 应为 true\n");
     pauseIfInteractive();
     return 0;
 }

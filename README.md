@@ -9,7 +9,7 @@ MusicServer 侧不直接加载任何官方二进制——设 `QS_SIGN_SERVER` �
 | 文件 | 说明 |
 |---|---|
 | `mssdk-sign/` | 签名服务：**C++ + metasecml.dll**（单文件实现，Windows 直跑 / Wine 跑）。见 [mssdk-sign/README.md](mssdk-sign/README.md)（默认端口 16889）与逆向记录 [mssdk-sign/REVERSE.md](mssdk-sign/REVERSE.md) |
-| `qs-login/` | 本机客户端登录导入工具（C++）：读官方 PC 客户端的 `DeviceV1` + Chromium Cookies → 可选签名校验（`metasecml.dll`）→ 写 MusicServer 的 `data/auth.json`（免扫码）。用法见 `qs-login.cpp` 头注释 |
+| `qs-login/` | 本机客户端登录态读取工具（C++，**只读不写**）：读官方 PC 客户端的 `DeviceV1` + Chromium Cookies → 可选签名校验（`metasecml.dll`）→ 完整显示 sessionid 并复制到剪贴板，粘到哪由你自己决定。用法见 `qs-login.cpp` 头注释，可直接双击运行 |
 
 ## 快速开始
 
@@ -26,10 +26,9 @@ mssdk-sign.exe --selftest --dll .\metasecml.dll
 #    .env 或环境变量：QS_SIGN_SERVER=http://127.0.0.1:16889（及可选 QS_SIGN_TOKEN）
 #    未配签名服务时，MusicServer 自动回落 data/qs-sign.json 里的抓包固定值（X-Helios/X-Medusa）
 
-# 4.（可选）本机已装官方客户端时，免扫码导入登录态到 MusicServer
+# 4.（可选）本机已装官方客户端时，读出登录态（只读不写，sessionid 自动复制到剪贴板）
 cd ../qs-login && ./build.bat
-qs-login.exe                     # 读取 → 可选签名校验 → sessionid 复制到剪贴板 + 写 auth.json
-                                 # 可直接双击运行：窗口等回车才关；DLL 默认自动找 ..\mssdk-sign\
+qs-login.exe                     # 可直接双击：窗口等回车才关；DLL 默认自动找 ..\mssdk-sign\
 ```
 
 ## 约定（硬性规则）
