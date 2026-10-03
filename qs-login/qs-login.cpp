@@ -6,17 +6,19 @@
 //   → 写入 MusicServer 的 data/auth.json 的 qs 字段,免扫码登录。
 //
 // 用法:
-//   qs-login.exe                    # 读取 + 校验 + 写入 ../MusicServer/data/auth.json
-//   qs-login.exe --print            # 只打印 sessionid,不落盘
+//   qs-login.exe                    # 读取 + 校验 + 复制剪贴板 + 写入 ../MusicServer/data/auth.json
+//                                    # (可直接双击运行:窗口等回车才关,sessionid 完整显示并自动复制)
+//   qs-login.exe --print            # 只输出 sessionid 到 stdout(脚本用:不暂停/不写剪贴板/不落盘)
 //   qs-login.exe --no-verify        # 跳过 /luna/pc/me 校验
+//   qs-login.exe --no-pause         # 结束时不等待回车(脚本用)
 //   qs-login.exe --dir <目录>       # 客户端数据目录(默认 %APPDATA%\SodaMusic,或 QS_SODA_DATA_DIR)
 //   qs-login.exe --auth <文件>      # auth.json 路径(默认 ../MusicServer/data/auth.json,或 QS_AUTH_FILE)
-//   qs-login.exe --dll <path>       # metasecml.dll(校验签名用;默认 exe 同目录,缺了就跳过校验)
+//   qs-login.exe --dll <path>       # metasecml.dll(校验签名用;默认 exe 同目录,其次 ..\mssdk-sign\,缺了跳过校验)
 //
 // 实现说明(无第三方依赖):
 //   * gzip/DEFLATE 解压自带(RFC 1951/1952),用于 DeviceV1
-//   * SQLite 读取:优先系统 winsqlite3.dll(Win10+ 自带,支持 WAL);不可用时回退内置只读
-//     解析器(不处理 WAL,客户端开着时可能读到旧数据,建议退出客户端后再跑)
+//   * SQLite 读取:优先系统 winsqlite3.dll(Win10+ 自带,支持 WAL,客户端开着也能读到最新数据);
+//     不可用时回退内置只读解析器(不处理 WAL,客户端开着时可能读到旧数据)
 //   * cookie 值优先读 value 列;为空时回退解密 encrypted_value(Chromium v10/v11:
 //     Local State 里的 key(DPAPI 解出)+ AES-256-GCM;v20 app-bound 无法离线解密,会明确报错)
 //   * 签名校验直接调 metasecml.dll(调用 ABI 与 mssdk-sign 一致,见其 REVERSE.md),HTTPS 走 WinHTTP
@@ -24,7 +26,7 @@
 // 构建(任选其一):
 //   Windows/MSVC : build.bat
 //   Linux/MinGW  : x86_64-w64-mingw32-g++ -std=c++17 -O2 -static -static-libgcc -static-libstdc++ \
-//                    -o qs-login.exe qs-login.cpp -lwinhttp -lbcrypt -lcrypt32 -lversion
+//                    -o qs-login.exe qs-login.cpp -lwinhttp -lbcrypt -lcrypt32 -lversion -luser32
 
 #define _CRT_SECURE_NO_WARNINGS
 #include <windows.h>
@@ -48,6 +50,7 @@
 #pragma comment(lib, "bcrypt.lib")
 #pragma comment(lib, "crypt32.lib")
 #pragma comment(lib, "version.lib")
+#pragma comment(lib, "user32.lib")
 #endif
 
 // ---------------------------------------------------------------- 基础工具(路径一律按 UTF-8 存,文件 API 内部转宽字符)
@@ -92,6 +95,45 @@ static bool fileExists(const std::string &path) {
     DWORD a = GetFileAttributesW(toWide(path).c_str());
     return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
 }
+// 以宽松共享模式(READ|WRITE|DELETE)拷贝文件。客户端开着时 SQLite 持有 cookie 库的读写句柄,
+// CopyFileW 的内部共享模式与之冲突会报错误码 32(共享冲突),这样拷不会(等价 Node copyFileSync)。
+static bool copyFileShared(const std::string &src, const std::string &dst, DWORD &err) {
+    HANDLE in = CreateFileW(toWide(src).c_str(), GENERIC_READ,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                            FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (in == INVALID_HANDLE_VALUE) {
+        err = GetLastError();
+        return false;
+    }
+    HANDLE out = CreateFileW(toWide(dst).c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                             FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (out == INVALID_HANDLE_VALUE) {
+        err = GetLastError();
+        CloseHandle(in);
+        return false;
+    }
+    bool ok = true;
+    char buf[65536];
+    for (;;) {
+        DWORD n = 0;
+        if (!ReadFile(in, buf, sizeof buf, &n, nullptr)) {
+            err = GetLastError();
+            ok = false;
+            break;
+        }
+        if (!n) break;
+        DWORD w = 0;
+        if (!WriteFile(out, buf, n, &w, nullptr) || w != n) {
+            err = GetLastError();
+            ok = false;
+            break;
+        }
+    }
+    CloseHandle(in);
+    CloseHandle(out);
+    if (!ok) DeleteFileW(toWide(dst).c_str());
+    return ok;
+}
 static std::string exeDir() {
     wchar_t b[MAX_PATH];
     DWORD n = GetModuleFileNameW(nullptr, b, MAX_PATH);
@@ -127,9 +169,48 @@ static std::string jsonEscape(const std::string &s) {
     return o;
 }
 
+static bool g_pauseOnExit = true;  // 双击运行时窗口别一闪而过;--print / --no-pause 关掉(脚本场景)
+
+static bool stdinIsConsole() {
+    DWORD mode = 0;
+    HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
+    return h != nullptr && h != INVALID_HANDLE_VALUE && GetConsoleMode(h, &mode) != 0;
+}
+static void pauseIfInteractive() {
+    if (!g_pauseOnExit || !stdinIsConsole()) return;
+    printf("\n按回车键退出...");
+    fflush(stdout);
+    int c;
+    while ((c = getchar()) != '\n' && c != EOF) {
+    }
+}
+
+// sessionid 写入剪贴板,双击场景直接 Ctrl+V 粘贴
+static bool copyToClipboard(const std::string &text) {
+    if (!OpenClipboard(nullptr)) return false;
+    if (!EmptyClipboard()) {
+        CloseClipboard();
+        return false;
+    }
+    bool ok = false;
+    HGLOBAL g = GlobalAlloc(GMEM_MOVEABLE, text.size() + 1);
+    if (g) {
+        char *p = (char *)GlobalLock(g);
+        if (p) {
+            memcpy(p, text.c_str(), text.size() + 1);
+            GlobalUnlock(g);
+            ok = SetClipboardData(CF_TEXT, g) != nullptr;  // 成功后内存归系统,不再 GlobalFree
+        }
+        if (!ok) GlobalFree(g);
+    }
+    CloseClipboard();
+    return ok;
+}
+
 static void die(const std::string &msg) {
     fflush(stdout);  // 管道/重定向时 stderr 不排队,先刷掉已打印的信息行
     fprintf(stderr, "✗ %s\n", msg.c_str());
+    pauseIfInteractive();
     exit(1);
 }
 
@@ -559,7 +640,8 @@ static Api load() {
 // 返回值:0 查到了(或不为空也继续找)、1 正常结束无行,2 忙/锁,3 其他错误
 static int querySessionId(const Api &a, const std::string &dbPath, CookieRow &out, std::string &err) {
     void *db = nullptr;
-    if (a.open_v2(dbPath.c_str(), &db, 0x1 /*READONLY*/, nullptr) != 0 || !db) {
+    // 对"我们自己的临时副本"读写打开:库处于 WAL 模式且没带 -shm 时,只读打开会因无法恢复 WAL 而失败
+    if (a.open_v2(dbPath.c_str(), &db, 0x2 /*READWRITE*/, nullptr) != 0 || !db) {
         err = "sqlite3_open_v2 失败";
         return 3;
     }
@@ -624,7 +706,8 @@ class Db {
             return false;
         }
         usable_ = ps_ - (uint8_t)d_[20];
-        if (be32(56) != 1) {
+        uint32_t enc = be32(56);
+        if (enc != 0 && enc != 1) {  // 0 = 主文件还没写过页(数据全在 -wal,后续找表会给出准确提示)
             err = "仅支持 UTF-8 编码的 SQLite 文件";
             return false;
         }
@@ -1186,13 +1269,15 @@ static HttpResult httpsGet(const std::wstring &host, const std::string &pathQuer
 static void printUsage() {
     printf(
         "qs-login —— 汽水音乐本机客户端登录导入\n"
-        "从官方 PC 客户端数据目录读 sessionid(可选签名校验),写入 MusicServer 的 auth.json。\n"
+        "从官方 PC 客户端数据目录读 sessionid(可选签名校验),自动复制到剪贴板并写入 MusicServer 的\n"
+        "auth.json。可直接双击运行:窗口会等待回车才关闭,sessionid 会完整显示并自动复制。\n"
         "用法: qs-login [选项]\n"
-        "  --print          只打印 sessionid,不落盘\n"
+        "  --print          只输出 sessionid 到 stdout(脚本用,不暂停/不写剪贴板/不落盘)\n"
         "  --no-verify      跳过 /luna/pc/me 校验\n"
+        "  --no-pause       结束时不等待回车(脚本用)\n"
         "  --dir <目录>     客户端数据目录(默认 %%APPDATA%%\\SodaMusic,或 QS_SODA_DATA_DIR)\n"
-        "  --auth <文件>    auth.json 路径(默认 ..\\MusicServer\\data\\auth.json,或 QS_AUTH_FILE)\n"
-        "  --dll <path>     metasecml.dll(校验签名用;默认 exe 同目录,缺了就跳过校验)\n");
+        "  --auth <文件>    auth.json 路径(默认 ..\\..\\MusicServer\\data\\auth.json,或 QS_AUTH_FILE)\n"
+        "  --dll <path>     metasecml.dll(校验签名用;默认 exe 同目录,其次 ..\\mssdk-sign\\,缺了跳过校验)\n");
 }
 
 int main(int argc, char **argv) {
@@ -1205,8 +1290,9 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
         auto next = [&]() -> std::string { return (i + 1 < argc) ? argv[++i] : ""; };
-        if (a == "--print") printOnly = true;
+        if (a == "--print") { printOnly = true; g_pauseOnExit = false; }  // --print 给脚本用,不暂停
         else if (a == "--no-verify") skipVerify = true;
+        else if (a == "--no-pause") g_pauseOnExit = false;
         else if (a == "--dir") dirArg = next();
         else if (a == "--auth") authArg = next();
         else if (a == "--dll") dllArg = next();
@@ -1259,11 +1345,16 @@ int main(int argc, char **argv) {
     std::string tmpBase = fromWide(std::wstring(tmpDirBuf, tn)) + "qs-cookies-" + std::to_string(GetCurrentProcessId());
     std::string tmpDb = tmpBase + "-Cookies";
     {
-        std::wstring src = toWide(cookieDb), dst = toWide(tmpDb);
-        if (!CopyFileW(src.c_str(), dst.c_str(), FALSE)) die("复制 cookie 库失败(错误码 " + std::to_string(GetLastError()) + ")");
-        for (const wchar_t *side : {L"-wal", L"-shm"}) {
-            std::wstring s2 = src + side, d2 = dst + side;
-            if (fileExists(fromWide(s2))) CopyFileW(s2.c_str(), d2.c_str(), FALSE);
+        DWORD cerr = 0;
+        // 只拷 db 和 -wal(不拷 -shm:共享内存是临时索引,读写打开副本时 SQLite 会自建)
+        if (!copyFileShared(cookieDb, tmpDb, cerr)) {
+            die(cerr == 32 /*ERROR_SHARING_VIOLATION*/
+                    ? "cookie 库被独占锁定,复制失败。请退出汽水音乐客户端后重试"
+                    : "复制 cookie 库失败(错误码 " + std::to_string(cerr) + ")");
+        }
+        if (fileExists(cookieDb + "-wal")) {
+            DWORD werr = 0;
+            copyFileShared(cookieDb + "-wal", tmpDb + "-wal", werr);  // 拷失败就只有主库,winsqlite3 仍可读
         }
     }
     CookieRow row;
@@ -1283,13 +1374,18 @@ int main(int argc, char **argv) {
                 cleanupTmp();
                 die("客户端正在运行且 cookie 库被占用,请退出汽水音乐客户端后重试");
             }
+            if (rc == 1) {  // 正常查完没有该行:winsqlite3 已处理 WAL,结论可信,不用再走内置解析器
+                cleanupTmp();
+                die("客户端未登录(cookie 库中没有 .qishui.com 的 sessionid),请先在客户端登录");
+            }
             if (rc == 3) printf("! winsqlite3 读取失败(%s),改用内置解析器\n", cookieErr.c_str());
         }
         if (rc != 0) {
             if (!lite::querySessionId(tmpDb, row, cookieErr)) {
                 cleanupTmp();
                 if (!cookieErr.empty()) die("读取 cookie 库失败: " + cookieErr);
-                die("客户端未登录(cookie 库中没有 .qishui.com 的 sessionid),请先在客户端登录");
+                die("客户端未登录(cookie 库中没有 .qishui.com 的 sessionid),请先在客户端登录。\n"
+                    "  (注:内置解析器不处理 WAL,客户端开着时可能读到旧数据,可退出客户端后重试)");
             }
         }
     }
@@ -1309,6 +1405,10 @@ int main(int argc, char **argv) {
     // —— 3. 可选:签名打 /luna/pc/me 校验(status_code === 0 视为有效)——
     int verified = -1;  // 1 有效 / 0 失效 / -1 无法判定
     std::string dllPath = !dllArg.empty() ? dllArg : root + "\\metasecml.dll";
+    if (dllArg.empty() && !fileExists(dllPath)) {
+        std::string alt = root + "\\..\\mssdk-sign\\metasecml.dll";  // 本仓库默认布局:签名服务目录里
+        if (fileExists(alt)) dllPath = alt;
+    }
     if (!skipVerify && !did.empty()) {
         if (!fileExists(dllPath)) {
             printf("! 未找到 %s(--dll 可指定),无法校验\n", dllPath.c_str());
@@ -1366,9 +1466,6 @@ int main(int argc, char **argv) {
     }
     if (verified == 0) die("客户端登录态已失效,请在汽水音乐客户端重新登录后再跑本工具");
 
-    printf("· sessionid: %s…%s(%zu 字符)\n",
-           sessionid.substr(0, 6).c_str(), sessionid.substr(sessionid.size() > 4 ? sessionid.size() - 4 : 0).c_str(),
-           sessionid.size());
     printf("· 校验: %s\n", verified == 1 ? "有效" : verified == 0 ? "已失效"
                                     : skipVerify ? "已跳过(--no-verify)" : "无法判定(缺签名模块或网络异常)");
 
@@ -1376,6 +1473,11 @@ int main(int argc, char **argv) {
         printf("%s\n", sessionid.c_str());
         return 0;
     }
+
+    // 交互模式:完整显示 + 复制到剪贴板,直接可粘贴
+    printf("· sessionid: %s(%zu 字符)\n", sessionid.c_str(), sessionid.size());
+    printf(copyToClipboard(sessionid) ? "· 已复制到剪贴板,可直接 Ctrl+V 粘贴\n"
+                                      : "! 复制到剪贴板失败,请手动选中上一行复制\n");
 
     // —— 4. 写 auth.json(默认 ../MusicServer/data/auth.json;凭据归 MusicServer 管)——
     std::string musicServerDir = root + "\\..\\MusicServer";
@@ -1420,5 +1522,6 @@ int main(int argc, char **argv) {
     }
     printf("✓ 已写入 %s(qs.sessionid)\n", authPath.c_str());
     printf("  MusicServer 在运行的话需要重启才生效(凭据已缓存);之后 /login/status 的 qs.logged 应为 true\n");
+    pauseIfInteractive();
     return 0;
 }

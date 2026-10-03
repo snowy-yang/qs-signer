@@ -7,7 +7,7 @@ if not exist "%VCVARS%" (
   exit /b 1
 )
 call "%VCVARS%" >nul
-cl /nologo /O2 /EHsc /std:c++17 /utf-8 /W3 qs-login.cpp /link /out:qs-login.exe winhttp.lib bcrypt.lib crypt32.lib version.lib
+cl /nologo /O2 /EHsc /std:c++17 /utf-8 /W3 qs-login.cpp /link /out:qs-login.exe winhttp.lib bcrypt.lib crypt32.lib version.lib user32.lib
 if errorlevel 1 (
   echo [x] build failed
   exit /b 1

@@ -28,8 +28,8 @@ mssdk-sign.exe --selftest --dll .\metasecml.dll
 
 # 4.（可选）本机已装官方客户端时，免扫码导入登录态到 MusicServer
 cd ../qs-login && ./build.bat
-qs-login.exe --print                                       # 先看能否读到 sessionid
-qs-login.exe --dll ..\mssdk-sign\metasecml.dll             # 校验并写入 ..\..\MusicServer\data\auth.json
+qs-login.exe                     # 读取 → 可选签名校验 → sessionid 复制到剪贴板 + 写 auth.json
+                                 # 可直接双击运行：窗口等回车才关；DLL 默认自动找 ..\mssdk-sign\
 ```
 
 ## 约定（硬性规则）
