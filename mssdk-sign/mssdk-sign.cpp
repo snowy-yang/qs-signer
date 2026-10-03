@@ -18,8 +18,8 @@
 //   Linux/MinGW  : x86_64-w64-mingw32-g++ -std=c++17 -O2 -static -static-libgcc -static-libstdc++ \
 //                    -o mssdk-sign.exe mssdk-sign.cpp -lws2_32 -lversion -lwinpthread
 // 运行:
-//   mssdk-sign.exe --port 16889 --dll .\metasecml.dll
-//   wine mssdk-sign.exe --port 16889 --dll ./metasecml.dll
+//   mssdk-sign.exe --port 16689 --dll .\metasecml.dll
+//   wine mssdk-sign.exe --port 16689 --dll ./metasecml.dll
 //
 // 依赖:仅 Win32 API + Winsock(无第三方库,无 C++ 异常跨模块问题)。
 
@@ -465,7 +465,7 @@ class Signer {
 
 struct Config {
     std::string bind = "127.0.0.1";
-    int port = 16889;
+    int port = 16689;
     std::string dll;
     std::string token;      // 非空则要求 Bearer / X-Auth-Token
     uint64_t signRva = 0;   // 0 = 用版本表
@@ -661,7 +661,7 @@ static void printUsage() {
     printf(
         "mssdk-sign —— 汽水音乐 metasec 签名服务\n"
         "用法: mssdk-sign [选项]\n"
-        "  --port <n>        监听端口(默认 16889)\n"
+        "  --port <n>        监听端口(默认 16689)\n"
         "  --bind <addr>     绑定地址(默认 127.0.0.1;容器内跨机调用用 0.0.0.0)\n"
         "  --dll <path>      metasecml.dll 路径(默认 exe 同目录 metasecml.dll)\n"
         "  --token <t>       启用鉴权(Bearer / X-Auth-Token)\n"

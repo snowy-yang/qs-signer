@@ -44,7 +44,7 @@ sudo apt install mingw-w64
 Windows:
 
 ```bat
-mssdk-sign.exe --port 16889 --dll .\metasecml.dll --token 你的口令 -v
+mssdk-sign.exe --port 16689 --dll .\metasecml.dll --token 你的口令 -v
 ```
 
 Wine(建议放在自己的 prefix 里,和 DLL 同目录):
@@ -53,7 +53,7 @@ Wine(建议放在自己的 prefix 里,和 DLL 同目录):
 mkdir -p /opt/mssdk-sign && cd /opt/mssdk-sign
 cp mssdk-sign.exe metasecml.dll .
 WINEPREFIX=/opt/wine-mssdk wine mssdk-sign.exe --selftest --dll ./metasecml.dll   # 先自检
-WINEPREFIX=/opt/wine-mssdk wine mssdk-sign.exe --port 16889 --bind 0.0.0.0 --token 你的口令 -v
+WINEPREFIX=/opt/wine-mssdk wine mssdk-sign.exe --port 16689 --bind 0.0.0.0 --token 你的口令 -v
 ```
 
 systemd 单元示例:
@@ -67,7 +67,7 @@ After=network.target
 Environment=WINEPREFIX=/opt/wine-mssdk
 Environment=WINEDEBUG=-all
 WorkingDirectory=/opt/mssdk-sign
-ExecStart=/usr/bin/wine /opt/mssdk-sign/mssdk-sign.exe --port 16889 --bind 127.0.0.1 --token CHANGE_ME
+ExecStart=/usr/bin/wine /opt/mssdk-sign/mssdk-sign.exe --port 16689 --bind 127.0.0.1 --token CHANGE_ME
 Restart=always
 RestartSec=3
 
@@ -79,7 +79,7 @@ WantedBy=multi-user.target
 
 | 参数 | 说明 |
 |---|---|
-| `--port <n>` | 监听端口,默认 16889 |
+| `--port <n>` | 监听端口,默认 16689 |
 | `--bind <addr>` | 默认 `127.0.0.1`;容器/跨机调用才用 `0.0.0.0`(务必配 token) |
 | `--dll <path>` | `metasecml.dll` 路径,默认 exe 同目录 |
 | `--token <t>` | 启用鉴权(`Authorization: Bearer <t>` 或 `X-Auth-Token: <t>`) |

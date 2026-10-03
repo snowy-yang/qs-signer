@@ -7,7 +7,7 @@
 // 集成到 MusicServer 时,把 signQishuiRequest() 换成这个 HTTP 调用即可
 // (签名输入必须与真实发出的头完全一致,含 x-ss-stub)。
 
-const BASE = process.env.MSSDK_SIGN_URL ?? 'http://127.0.0.1:16889'
+const BASE = process.env.MSSDK_SIGN_URL ?? 'http://127.0.0.1:16689'
 const TOKEN = process.env.MSSDK_SIGN_TOKEN ?? ''
 
 const headers0 = (extra = {}) => (TOKEN ? { authorization: `Bearer ${TOKEN}`, ...extra } : extra)
