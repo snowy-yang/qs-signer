@@ -10,6 +10,7 @@ MusicServer 侧不直接加载任何官方二进制——设 `QS_SIGN_SERVER` �
 |---|---|
 | `mssdk-sign/` | 签名服务：**C++ + metasecml.dll**（单文件实现，Windows 直跑 / Wine 跑）。见 [mssdk-sign/README.md](mssdk-sign/README.md)（默认端口 16689）与逆向记录 [mssdk-sign/REVERSE.md](mssdk-sign/REVERSE.md) |
 | `qs-login/` | 本机客户端登录态读取工具（C++，**只读不写**）：读官方 PC 客户端的 `DeviceV1` + Chromium Cookies → 可选签名校验（`metasecml.dll`）→ 完整显示 sessionid 并复制到剪贴板，粘到哪由你自己决定。用法见 `qs-login.cpp` 头注释，可直接双击运行 |
+| `qs-login-rs/` | 同一工具的 **Rust 版**（生态 crate：flate2/rusqlite(bundled)/serde_json/ureq，功能与 C++ 版对等），`cargo build --release` 即可 |
 
 ## 快速开始
 

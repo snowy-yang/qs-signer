@@ -1,0 +1,30 @@
+[package]
+name = "qs-login"
+version = "0.1.0"
+edition = "2021"
+
+# 生态 crate 各司其职;metasecml.dll 的裸偏移调用/剪贴板/控制台少量 Win32 FFI
+[dependencies]
+flate2 = "1"                                              # DeviceV1 gzip 解压
+serde_json = "1"                                          # DeviceV1 / Local State / /me 响应
+rusqlite = { version = "0.32", features = ["bundled"] }   # cookie 库(自带 SQLite 源码编译,支持 WAL)
+ureq = { version = "2", default-features = false, features = ["native-tls"] }  # HTTPS(系统 schannel)
+base64 = "0.22"                                           # Local State 的 encrypted_key
+aes-gcm = "0.10"                                          # Chromium cookie v10/v11 解密
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security_Cryptography",
+    "Win32_System_Console",
+    "Win32_System_DataExchange",
+    "Win32_System_IO",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_System_Threading",
+    "Win32_Storage_FileSystem",
+] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
