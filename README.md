@@ -1,6 +1,6 @@
 # qs-signer —— 汽水音乐签名工具链
 
-汽水音乐（qishui / SodaMusic）PC 通道的签名与登录工具，从 [MusicServer](https://gitea.4i.hk/hhhge/MusicServer) 拆出独立维护。
+汽水音乐（qishui / SodaMusic）PC 通道的签名与登录工具，从 [MusicServer](https://github.com/snowy-yang/MusicServer) 拆出独立维护。
 MusicServer 侧不直接加载任何官方二进制——设 `QS_SIGN_SERVER` 指向本仓库的签名服务即可（详见 MusicServer 的
 `sdk/qs/mssdk.ts` 与其 README「汽水 PC 签名」一节）。
 
